@@ -23,6 +23,18 @@ llm = ChatOllama(
     model = "llama3.2:latest"
 )
 
+GLOBAL_SYSTEM_PREFIX = """You are an expert AI/ML and Agentic AI assistant.
+
+RULES:
+1. Understand the user's exact technical terminology.
+2. Never replace one technical acronym with another without evidence.
+3. Consider the surrounding conversation context.
+4. If a term has multiple meanings, use context to identify the correct one.
+5. If the meaning is genuinely ambiguous, ask the user for clarification.
+6. Never confidently answer an unrelated question.
+7. If you lack reliable information, admit it.
+8. Ensure your answer directly addresses the user's original question.
+"""
 
 
 
@@ -130,7 +142,7 @@ class State(TypedDict):
 
 
 # router setup
-ROUTER_SYSTEM = """ You are a routing module for a technical blog planner.
+ROUTER_SYSTEM = GLOBAL_SYSTEM_PREFIX + """You are a routing module for a technical blog planner.
 Decide whether web research is needed Before planning.
 
 Modes:
@@ -145,8 +157,7 @@ Modes:
 if needs_research=true:
 - Output 3-10 high- signal queries.
 - Queries should be scoped and specific (avoid generic queries like "AI", or "LLM").
-- if user asked for "last week/this week/latest", reflect that constraint In THE QUERIES.
-"""
+- if user asked for "last week/this week/latest", reflect that constraint In THE QUERIES."""
 
 def router_node(state: State) -> dict:
 
@@ -194,7 +205,7 @@ def _tavily_search(query: str, max_results: int = 5) -> List[dict]:
         )
     return normalized
 
-RESEARCH_SYSTEM = """ You are a research synthesizer for technical writing.
+RESEARCH_SYSTEM = GLOBAL_SYSTEM_PREFIX + """You are a research synthesizer for technical writing.
 
 Given raw web search result , produce a deduplicates list of EvidenceItem objects.
 
@@ -204,8 +215,7 @@ Rules:
 - If a published date is expicitly present in the result payload , keep it as YYYY-MM_DD.
   if missing or unclear , set published_at=null. Do not guess.
 - Keep snippets short.
-- Deduplicate by URL.
-"""
+- Deduplicate by URL."""
 
 def research_node(state: State) -> dict:
     # take the first 10 queries from state 
@@ -248,6 +258,7 @@ def orchestrator(state: State) -> dict:
         [
             SystemMessage(
                 content=(
+                    GLOBAL_SYSTEM_PREFIX +
                     "You are a senior technical writer and developer advocate. Your job is to produce a "
                     "highly actionable outline for a technical blog post.\n\n"
                     "Hard requirements:\n"
@@ -335,14 +346,20 @@ def worker(payload: dict) -> dict:
         )
     section_md = llm.invoke(
         [
-                SystemMessage(content="""You are a senior technical writer and developer advocate.
+                SystemMessage(content=GLOBAL_SYSTEM_PREFIX + """You are a senior technical writer and developer advocate.
                     Write ONE section of a technical blog post in Markdown.
 
                     Hard constraints:
+                    - Understand the users exact technical terminology.
                     - Follow the provided Goal and cover ALL Bullets in order (do not skip or merge bullets).
                     - Stay close to Target words (±15%).
                     - Output ONLY the section content in Markdown (no blog title H1, no extra commentary).
                     - Start with a '## <Section Title>' heading.
+                    - DO NOT include any images whatsoever. This means:
+                      * No Markdown image syntax: ![alt](url)
+                      * No image placeholders like [Image: ...] or [[IMAGE_1]]
+                      * No references to local files like ./image.png
+                      Text-only output. Use diagrams only as ASCII art if absolutely needed.
 
                     Scope guard (prevents mid-blog topic drift):
                     - If blog_kind == "news_roundup": do NOT turn this into a tutorial/how-to guide.
@@ -399,6 +416,26 @@ def worker(payload: dict) -> dict:
 
 import re
 from pathlib import Path
+def _strip_broken_images(md: str) -> str:
+    """Remove hallucinated/broken image references that the LLM sneaks in.
+
+    Removes:
+    - ![alt text](any url or path)  — standard markdown image syntax
+    - [Image: ...]                  — plain-text image placeholder
+    - [[IMAGE_N]]                   — template-style placeholders
+    Each is replaced by an empty string so the surrounding text stays intact.
+    """
+    # Remove markdown images:  ![alt](src)
+    md = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', md)
+    # Remove [Image: ...] placeholders
+    md = re.sub(r'\[Image:[^\]]*\]', '', md)
+    # Remove [[IMAGE_N]] style placeholders
+    md = re.sub(r'\[\[IMAGE_\d+\]\]', '', md)
+    # Collapse lines that became blank-only after stripping
+    md = re.sub(r'\n{3,}', '\n\n', md)
+    return md.strip()
+
+
 def reducer(state: State) -> dict:
     plan = state["plan"]
     if plan is None:
@@ -407,6 +444,9 @@ def reducer(state: State) -> dict:
     ordered_sections = [md for _, md in sorted(state["sections"], key=lambda x: x[0])]
     body = "\n\n".join(ordered_sections).strip()
     final_md = f"# {plan.blog_title}\n\n{body}\n"
+
+    # Strip any hallucinated image references the LLM produced
+    final_md = _strip_broken_images(final_md)
 
     # Sanitize filename: remove characters invalid on Windows (:, /, \, *, ?, ", <, >, |)
     safe_title = re.sub(r'[\\/:*?"<>|]', '', plan.blog_title).strip()

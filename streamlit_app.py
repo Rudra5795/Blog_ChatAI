@@ -140,6 +140,8 @@ def _init():
         "plan":       None,
         "evidence":   [],
         "final_md":   "",
+        "edited_md":  "",   # user-edited copy of final_md
+        "edit_mode":  False, # toggle state for Edit / Preview
         "logs":       [],
         "generating": False,
         "steps_done": [],   # list of step label strings shown during run
@@ -492,6 +494,8 @@ if generate_clicked and not st.session_state.generating:
                 elif node_name == "reducer":
                     final_md = node_output.get("final", "")
                     st.session_state.final_md = final_md
+                    st.session_state.edited_md = final_md   # seed editor
+                    st.session_state.edit_mode = False
                     label = "✅ Blog assembled & saved to outputs/"
                     st.session_state.steps_done.append(label)
                     add_log(label, "green")
@@ -511,13 +515,67 @@ if generate_clicked and not st.session_state.generating:
     st.rerun()   # re-render page so tabs show new data
 
 
+# ── Format-conversion helpers ─────────────────────────────────────────────────
+def md_to_txt(md: str) -> str:
+    """Strip common markdown symbols to produce clean plain text."""
+    txt = re.sub(r'^#{1,6}\s*', '', md, flags=re.MULTILINE)   # headings
+    txt = re.sub(r'\*{1,3}(.+?)\*{1,3}', r'\1', txt)          # bold/italic
+    txt = re.sub(r'`{1,3}[^`]*`{1,3}', '', txt)               # code
+    txt = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', txt)            # images
+    txt = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', txt)        # links
+    txt = re.sub(r'^[>\-\*\+]\s+', '', txt, flags=re.MULTILINE) # blockquotes/lists
+    txt = re.sub(r'\n{3,}', '\n\n', txt)
+    return txt.strip()
+
+
+def md_to_html(md: str, title: str) -> str:
+    """Convert markdown to a self-contained styled HTML page."""
+    import markdown as md_lib
+    body = md_lib.markdown(md, extensions=["fenced_code", "tables"])
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{title}</title>
+  <style>
+    body{{font-family:system-ui,sans-serif;max-width:860px;margin:40px auto;
+          padding:0 24px;line-height:1.7;color:#1a1a2e;background:#fff}}
+    h1,h2,h3{{color:#0d0d2b}} code{{background:#f3f4f6;padding:2px 5px;
+    border-radius:4px;font-size:.9em}} pre{{background:#1e1e2e;color:#cdd6f4;
+    padding:16px;border-radius:8px;overflow-x:auto}} blockquote{{
+    border-left:4px solid #c87f3e;margin:0;padding-left:16px;color:#555}}
+    table{{border-collapse:collapse;width:100%}} th,td{{border:1px solid #ddd;
+    padding:8px 12px;text-align:left}} th{{background:#f8f9fa}}
+  </style>
+</head>
+<body>
+{body}
+</body></html>"""
+
+
+def md_to_pdf(md: str) -> bytes:
+    """Convert markdown (as plain text) to a PDF and return the raw bytes."""
+    from fpdf import FPDF
+    txt = md_to_txt(md)
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=11)
+    for line in txt.split("\n"):
+        if line.strip() == "":
+            pdf.ln(4)
+        else:
+            pdf.multi_cell(0, 5, line, new_x="LMARGIN", new_y="NEXT")
+    return bytes(pdf.output())
+
+
 # ══════════════════════════════════════════════════════════
 #  TABS
 # ══════════════════════════════════════════════════════════
 tab_plan, tab_ev, tab_md, tab_logs = st.tabs([
     "🌿  Plan",
     "🔬  Evidence",
-    "📝  Markdown Preview",
+    "📝  Editor",
     "📋  Logs",
 ])
 
@@ -610,34 +668,102 @@ with tab_ev:
               {f'<div style="font-size:12px;color:rgba(232,235,240,.7);line-height:1.55">{snippet[:300]}</div>' if snippet else ''}
             </div>""", unsafe_allow_html=True)
 
-# ── MARKDOWN PREVIEW ──────────────────────────────────────
+# ── EDITOR + DOWNLOAD ────────────────────────────────────
 with tab_md:
     final_md = st.session_state.final_md
+    # Seed editor the first time a blog is loaded
+    if final_md and not st.session_state.edited_md:
+        st.session_state.edited_md = final_md
+
     if not final_md:
         st.markdown("""<div class="empty-state">
           <div class="empty-icon">📝</div>
-          <p class="empty-text">The rendered blog post will appear here once writing is complete.</p>
+          <p class="empty-text">Generate a blog to start editing and downloading.</p>
         </div>""", unsafe_allow_html=True)
     else:
-        # Toolbar row
         plan_data  = st.session_state.plan or {}
         blog_title = plan_data.get("blog_title", "blog")
         safe_name  = re.sub(r'[\\/:*?"<>|]', '', blog_title).strip() or "blog"
+        current_md = st.session_state.edited_md or final_md
 
-        col1, col2, col3 = st.columns([1.2, 1, 5])
-        with col1:
-            st.download_button("⬇️  Download .md", data=final_md,
-                               file_name=f"{safe_name}.md",
-                               mime="text/markdown", use_container_width=True)
-        with col2:
-            view_raw = st.toggle("Raw MD", value=False)
+        # ── Toolbar: Edit/Preview toggle + Save ───────────────────────────
+        tc1, tc2, tc3 = st.columns([1, 1, 6])
+        with tc1:
+            if st.button(
+                "✏️ Edit" if not st.session_state.edit_mode else "👁 Preview",
+                key="toggle_edit", use_container_width=True
+            ):
+                st.session_state.edit_mode = not st.session_state.edit_mode
+                st.rerun()
+        with tc2:
+            if st.session_state.edit_mode:
+                if st.button("💾 Save", key="save_edit", use_container_width=True):
+                    st.session_state.final_md = st.session_state.edited_md
+                    out_path = OUTPUT_DIR / f"{safe_name}.md"
+                    out_path.write_text(st.session_state.edited_md, encoding="utf-8")
+                    st.session_state.edit_mode = False
+                    st.success("✅ Saved to outputs/")
+                    st.rerun()
 
         st.divider()
 
-        if view_raw:
-            st.code(final_md, language="markdown")
+        # ── Edit / Preview pane ───────────────────────────────────────────
+        if st.session_state.edit_mode:
+            edited = st.text_area(
+                "Edit your blog (Markdown)",
+                value=current_md,
+                height=600,
+                key="md_editor",
+                label_visibility="collapsed",
+            )
+            st.session_state.edited_md = edited
         else:
-            st.markdown(final_md)
+            st.markdown(current_md)
+
+        st.divider()
+
+        # ── Download row ──────────────────────────────────────────────────
+        st.markdown('<span style="font-size:11px;font-weight:600;'
+                    'text-transform:uppercase;letter-spacing:.06em;color:#7a8499">'
+                    'Download As</span>', unsafe_allow_html=True)
+
+        dl1, dl2, dl3, dl4 = st.columns(4)
+        with dl1:
+            st.download_button(
+                "⬇️ Markdown (.md)",
+                data=current_md,
+                file_name=f"{safe_name}.md",
+                mime="text/markdown",
+                use_container_width=True,
+                key="dl_md",
+            )
+        with dl2:
+            st.download_button(
+                "⬇️ Plain Text (.txt)",
+                data=md_to_txt(current_md),
+                file_name=f"{safe_name}.txt",
+                mime="text/plain",
+                use_container_width=True,
+                key="dl_txt",
+            )
+        with dl3:
+            st.download_button(
+                "⬇️ HTML (.html)",
+                data=md_to_html(current_md, blog_title),
+                file_name=f"{safe_name}.html",
+                mime="text/html",
+                use_container_width=True,
+                key="dl_html",
+            )
+        with dl4:
+            st.download_button(
+                "⬇️ PDF (.pdf)",
+                data=md_to_pdf(current_md),
+                file_name=f"{safe_name}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key="dl_pdf",
+            )
 
 # ── LOGS ──────────────────────────────────────────────────
 with tab_logs:
