@@ -1,21 +1,36 @@
-import operator 
+import operator
+import os
+from typing import TypedDict, List, Annotated, Optional, Literal
+
 from langchain_community.tools.tavily_search import TavilySearchResults
-from dotenv import load_dotenv
-from typing import TypedDict, List, Annotated, Optional
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
-from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from datetime import date, timedelta
-import os
-from google.genai import types
-from google import genai
 from langchain_core.messages import SystemMessage, HumanMessage
-from typing import Literal
 
 
-load_dotenv()
+# ── Secrets loader ────────────────────────────────────────────────────────────
+# Works on Streamlit Cloud (st.secrets) AND locally (.env / shell env vars).
+def _load_secrets():
+    """Push Streamlit secrets into os.environ so every library picks them up."""
+    try:
+        import streamlit as st
+        for k, v in st.secrets.items():
+            if isinstance(v, str) and k not in os.environ:
+                os.environ[k] = v
+    except Exception:
+        pass  # Not running inside Streamlit — fall back to dotenv / shell env
+
+    # Still honour a local .env file if present (dev convenience)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=False)   # override=False: st.secrets win
+    except ImportError:
+        pass
+
+_load_secrets()
 
 
 
@@ -452,7 +467,8 @@ def reducer(state: State) -> dict:
     safe_title = re.sub(r'[\\/:*?"<>|]', '', plan.blog_title).strip()
 
     # Save into the outputs/ subfolder (create it if needed)
-    output_dir = Path("C:/Users/hp/Desktop/Blog_ChatAI/outputs")
+    # Use a portable relative path so the app works on any machine / cloud host
+    output_dir = Path(os.environ.get("BLOG_OUTPUT_DIR", "outputs"))
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{safe_title}.md"
     output_path.write_text(final_md, encoding="utf-8")

@@ -406,7 +406,7 @@ def md_to_pdf(md: str) -> bytes:
 
 # helper 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-OUTPUT_DIR = Path("C:/Users/hp/Desktop/Blog_ChatAI/outputs")
+OUTPUT_DIR = Path(os.environ.get("BLOG_OUTPUT_DIR", "outputs"))
 
 def list_past_blogs():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
