@@ -37,11 +37,29 @@ def _load_secrets():
 _load_secrets()
 
 
+# ── Lazy LLM initialiser ─────────────────────────────────────────────────────
+# ChatGroq MUST be created after _load_secrets() has run AND after Streamlit's
+# runtime is up (so st.secrets are readable).  Module-level instantiation
+# fails on Streamlit Cloud because st.secrets aren't available at import time.
+_llm_instance = None
 
-llm = ChatGroq(
-    model="llama-3.3-70b-versatile",  # Free tier — fast & capable
-    temperature=0.4,
-)
+def get_llm():
+    """Return a cached ChatGroq instance, creating it on first call."""
+    global _llm_instance
+    if _llm_instance is None:
+        _load_secrets()          # idempotent — safe to call again
+        api_key = os.environ.get("GROQ_API_KEY", "")
+        if not api_key:
+            raise EnvironmentError(
+                "GROQ_API_KEY is not set. "
+                "Add it to Streamlit Cloud Secrets (Settings → Secrets) or your local .env file."
+            )
+        _llm_instance = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0.4,
+            api_key=api_key,
+        )
+    return _llm_instance
 
 GLOBAL_SYSTEM_PREFIX = """You are an expert AI/ML and Agentic AI assistant.
 
@@ -182,7 +200,7 @@ if needs_research=true:
 def router_node(state: State) -> dict:
 
     topic = state["topic"]
-    decider = llm.with_structured_output(RouterDecision)
+    decider = get_llm().with_structured_output(RouterDecision)
     decision = decider.invoke(
         [
             SystemMessage(content=ROUTER_SYSTEM),
@@ -250,7 +268,7 @@ def research_node(state: State) -> dict:
     if not raw_results:
         return {"evidence":[]}
 
-    extractor = llm.with_structured_output(EvidencePack)
+    extractor = get_llm().with_structured_output(EvidencePack)
     pack = extractor.invoke(
         [
             SystemMessage(content=RESEARCH_SYSTEM),
@@ -270,7 +288,7 @@ def research_node(state: State) -> dict:
 
 # orchestrator 
 def orchestrator(state: State) -> dict:
-    planner = llm.with_structured_output(Plan)
+    planner = get_llm().with_structured_output(Plan)
     evidence = state.get("evidence",[])
     mode = state.get("mode", "closed_book")
 
@@ -364,7 +382,7 @@ def worker(payload: dict) -> dict:
             f"-{e.title} | {e.url} | {e.published_at or 'date:unknown'}".strip()
             for e in evidence[:20]
         )
-    section_md = llm.invoke(
+    section_md = get_llm().invoke(
         [
                 SystemMessage(content=GLOBAL_SYSTEM_PREFIX + """You are a senior technical writer and developer advocate.
                     Write ONE section of a technical blog post in Markdown.
