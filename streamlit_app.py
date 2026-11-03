@@ -177,7 +177,7 @@ def load_pipeline():
     from langgraph.types import Send
     from langchain_groq import ChatGroq
     from langchain_core.messages import SystemMessage, HumanMessage
-    from langchain_tavily import TavilySearch
+    from langchain_community.tools.tavily_search import TavilySearchResults
     import warnings
     warnings.filterwarnings("ignore")
 
@@ -253,7 +253,7 @@ If needs_research=true output 3-10 specific queries."""
 
     # ── Research ──────────────────────────────────────────────────────────────
     def _tavily(q, max_results=5):
-        tool = TavilySearch(max_results=max_results)
+        tool = TavilySearchResults(max_results=max_results)
         results = tool.invoke({"query": q})
         return [{
             "title": r.get("title",""), "url": r.get("url",""),

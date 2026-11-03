@@ -2,7 +2,7 @@ import operator
 import os
 from typing import TypedDict, List, Annotated, Optional, Literal
 
-from langchain_tavily import TavilySearch
+from langchain_community.tools.tavily_search import TavilySearchResults
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
@@ -225,7 +225,7 @@ def route_next(state: State) -> str:
 
 # tavily setup
 def _tavily_search(query: str, max_results: int = 5) -> List[dict]:
-    tool = TavilySearch(max_results=max_results)
+    tool = TavilySearchResults(max_results=max_results)
     results = tool.invoke({"query": query})
 
     normalized : List[dict] = []
