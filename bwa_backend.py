@@ -6,9 +6,13 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
-from langchain_ollama import ChatOllama
+from langchain_groq import ChatGroq
 from datetime import date, timedelta
 from langchain_core.messages import SystemMessage, HumanMessage
+
+
+
+
 
 
 # ── Secrets loader ────────────────────────────────────────────────────────────
@@ -34,8 +38,9 @@ _load_secrets()
 
 
 
-llm = ChatOllama(
-    model = "llama3.2:latest"
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile",  # Free tier — fast & capable
+    temperature=0.4,
 )
 
 GLOBAL_SYSTEM_PREFIX = """You are an expert AI/ML and Agentic AI assistant.
