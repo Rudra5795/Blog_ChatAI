@@ -53,27 +53,26 @@ def images_zip(images_dir: Path) -> Optional[bytes]:
 
 def try_stream(graph_app, inputs: Dict[str, Any]) -> Iterator[Tuple[str, Any]]:
     """
-    Stream graph progress if available; else invoke.
-    Yields ("updates"/"values"/"final", payload).
+    Stream graph steps and accumulate state; yield each step as "updates",
+    then yield the merged final state as "final" — without a second invoke().
     """
+    accumulated: Dict[str, Any] = {}
+
     try:
         for step in graph_app.stream(inputs, stream_mode="updates"):
             yield ("updates", step)
-        out = graph_app.invoke(inputs)
-        yield ("final", out)
+            # Merge each node's output into accumulated state
+            if isinstance(step, dict):
+                for node_out in step.values():
+                    if isinstance(node_out, dict):
+                        accumulated.update(node_out)
+        # Use accumulated state as final output (no second invoke!)
+        yield ("final", accumulated)
         return
     except Exception:
         pass
 
-    try:
-        for step in graph_app.stream(inputs, stream_mode="values"):
-            yield ("values", step)
-        out = graph_app.invoke(inputs)
-        yield ("final", out)
-        return
-    except Exception:
-        pass
-
+    # Fallback: plain invoke (no streaming)
     out = graph_app.invoke(inputs)
     yield ("final", out)
 
