@@ -1,9 +1,23 @@
 import os
-# ── Kill LangSmith tracing before any langchain import ───────────────────────
-os.environ["LANGCHAIN_TRACING_V2"] = "false"
-os.environ["LANGCHAIN_TRACING"]    = "false"
 
 import streamlit as st
+
+# ── Secrets loader (Streamlit Cloud + local .env) ────────────────────────────
+def _load_secrets():
+    """Push st.secrets into os.environ so all libraries pick them up."""
+    try:
+        for k, v in st.secrets.items():
+            if isinstance(v, str) and k not in os.environ:
+                os.environ[k] = v
+    except Exception:
+        pass
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=False)
+    except ImportError:
+        pass
+
+_load_secrets()
 import operator, re, time
 from pathlib import Path
 from typing import TypedDict, List, Annotated, Optional, Literal
@@ -161,13 +175,19 @@ def load_pipeline():
     from pydantic import BaseModel, Field as PField
     from langgraph.graph import StateGraph, START, END
     from langgraph.types import Send
-    from langchain_ollama import ChatOllama
+    from langchain_groq import ChatGroq
     from langchain_core.messages import SystemMessage, HumanMessage
     from langchain_community.tools.tavily_search import TavilySearchResults
     import warnings
     warnings.filterwarnings("ignore")
 
-    llm = ChatOllama(model="llama3.2:latest")
+    _load_secrets()   # ensure secrets are in os.environ before building client
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        st.error("❌ GROQ_API_KEY is not set. Add it to Streamlit Cloud Secrets (Settings → Secrets).")
+        st.stop()
+
+    llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.4, api_key=api_key)
 
     # ── Schemas ───────────────────────────────────────────────────────────────
     class Task(BaseModel):
@@ -311,10 +331,11 @@ Output ONLY the section markdown. Be precise, avoid fluff."""
         plan = state["plan"]
         ordered = [md for _, md in sorted(state["sections"], key=lambda x: x[0])]
         final_md = f"# {plan.blog_title}\n\n" + "\n\n".join(ordered) + "\n"
-        safe = re.sub(r'[\\/:*?"<>|]', '', plan.blog_title).strip()
-        out = Path("C:/Users/hp/Desktop/Blog_ChatAI/outputs")
-        out.mkdir(parents=True, exist_ok=True)
-        (out / f"{safe}.md").write_text(final_md, encoding="utf-8")
+        import re as _re
+        safe = _re.sub(r'[\\/:*?"<>|]', '', plan.blog_title).strip()
+        out_dir = Path(os.environ.get("BLOG_OUTPUT_DIR", "outputs"))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / f"{safe}.md").write_text(final_md, encoding="utf-8")
         return {"final": final_md}
 
     # ── Build graph ───────────────────────────────────────────────────────────
@@ -334,7 +355,7 @@ Output ONLY the section markdown. Be precise, avoid fluff."""
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-OUTPUT_DIR = Path("C:/Users/hp/Desktop/Blog_ChatAI/outputs")
+OUTPUT_DIR = Path(os.environ.get("BLOG_OUTPUT_DIR", "outputs"))
 
 def list_past_blogs():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
